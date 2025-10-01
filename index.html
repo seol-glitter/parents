@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>학부모 성취 열람</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+  :root{--line:#e2e8f0; --ink:#0f172a; --muted:#64748b; --btn:#0ea5e9; --btnD:#0284c7}
+  html,body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;color:var(--ink);background:#f8fafc}
+  .wrap{max-width:900px;margin:0 auto;padding:16px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.06);padding:16px}
+  h1{margin:0 0 10px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .inp{flex:1 1 180px;min-width:180px;padding:12px;border:1px solid #cbd5e1;border-radius:12px}
+  .btn{padding:12px 16px;border:0;border-radius:12px;background:var(--btn);color:#fff;font-weight:900;cursor:pointer}
+  .btn:hover{background:var(--btnD)}
+  .note{font-size:12px;color:var(--muted);margin-top:6px}
+  .list{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-top:12px}
+  .item{border:1px solid var(--line);border-radius:12px;background:#fff;padding:6px}
+  .thumb{width:100%;height:100px;object-fit:cover;border-radius:8px;background:#e2e8f0}
+  .cap{font-size:12px;color:#334155;margin-top:4px;text-align:center}
+</style>
+<body>
+<!-- EXEC Glue (다른 페이지와 동일) -->
+<script>
+(function(){
+  const q=new URLSearchParams(location.search);
+  const paramExec=(q.get('exec')||'').trim();
+  const savedExec=localStorage.getItem('EXEC')||'';
+  const DEFAULT_EXEC="";
+  const EXEC=paramExec||savedExec||DEFAULT_EXEC;
+  if(EXEC && EXEC!==savedExec) localStorage.setItem('EXEC', EXEC);
+  window.EXEC=EXEC;
+
+  document.addEventListener('DOMContentLoaded',()=>{
+    if(!EXEC) return;
+    document.querySelectorAll('a[href$=".html"]').forEach(a=>{
+      const u=new URL(a.getAttribute('href'), location.href);
+      if(!u.searchParams.get('exec')){ u.searchParams.set('exec', EXEC); a.href=u.pathname+u.search; }
+    });
+  });
+})();
+</script>
+
+<div class="wrap">
+  <div class="card">
+    <h1>학부모 성취 열람</h1>
+    <div class="row" style="margin-top:8px">
+      <input id="school" class="inp" placeholder="기관명">
+      <input id="klass"  class="inp" placeholder="학급명">
+      <input id="pcode"  class="inp" placeholder="학부모 코드(4자리)" maxlength="4" inputmode="numeric" pattern="[0-9]*">
+      <input id="cno"    class="inp" placeholder="자녀번호(01~99)" maxlength="2" inputmode="numeric" pattern="[0-9]*">
+      <button id="btnGo" class="btn">조회</button>
+    </div>
+    <div id="msg" class="note">※ 안내: 학부모 코드는 교사용 대시보드에 자동 생성되어 있습니다.</div>
+
+    <div id="who" class="note" style="display:none; margin-top:10px"></div>
+    <div id="list" class="list"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const EXEC=window.EXEC||'';
+  const msg=$('msg'), list=$('list'), who=$('who');
+
+  function jsonp(url,timeout=15000){
+    return new Promise((res,rej)=>{
+      const cb='cb_'+Math.random().toString(36).slice(2); let done=false;
+      const t=setTimeout(()=>{if(done)return;done=true;cleanup();rej(new Error('timeout'));},timeout);
+      function cleanup(){try{delete window[cb];s.remove();}catch(_){ } clearTimeout(t);}
+      window[cb]=d=>{if(done)return;done=true;cleanup();res(d);};
+      const s=document.createElement('script');
+      s.src=url+(url.includes('?')?'&':'?')+'callback='+cb; s.onerror=()=>{if(done)return;done=true;cleanup();rej(new Error('network'));};
+      document.body.appendChild(s);
+    });
+  }
+
+  async function query(){
+    list.innerHTML=''; who.style.display='none';
+    const school=$('school').value.trim(), klass=$('klass').value.trim();
+    const pcode=($('pcode').value||'').replace(/\D/g,'').slice(0,4);
+    const cno=parseInt(($('cno').value||'').replace(/\D/g,'').slice(0,2),10)||0;
+    if(!EXEC){ msg.textContent='API 주소(EXEC)가 없습니다. 교사용 홈/연결에서 한번만 들어오면 자동 설정됩니다.'; return; }
+    if(!school||!klass||!pcode||!(cno>=1&&cno<=99)){ msg.textContent='기관/학급/코드(4)/자녀번호(01~99)를 모두 입력해주세요.'; return; }
+
+    msg.textContent='조회 중…';
+    try{
+      // 1) 자녀 1명 매칭
+      const j = await jsonp(EXEC+'?'+new URLSearchParams({action:'resolveByParentCode',schoolId:school,classId:klass,parentCode:pcode,childNo:cno}));
+      if(!j || !j.ok){ msg.textContent='조회 실패: '+(j&&j.error||'오류'); return; }
+      const tk=j.tk, child=j.child;
+
+      who.textContent = `기관: ${school} · 학급: ${klass} · 자녀번호: ${String(cno).padStart(2,'0')} · 이름: ${child}`;
+      who.style.display='block';
+
+      // 2) 최신 항목 목록 → 해당 이름만 필터
+      const L = await jsonp(EXEC+'?'+new URLSearchParams({action:'listByChild', key:tk}));
+      const items = (L && L.items)||[];
+      const mine = items.filter(x=>String(x.child||'').trim()===child);
+      if(!mine.length){ msg.textContent='아직 업로드된 성취 사진이 없습니다.'; return; }
+
+      msg.textContent=''; list.innerHTML='';
+      mine.forEach(it=>{
+        const box=document.createElement('div'); box.className='item';
+        const img=document.createElement('img'); img.className='thumb'; img.alt='미리보기';
+        // 썸네일 base64 API 호출
+        (async()=>{
+          try{
+            const t=await jsonp(EXEC+'?'+new URLSearchParams({action:'thumbB64',fileId:it.fileId}));
+            if(t && t.ok && t.b64){ img.src='data:'+(t.mime||'image/jpeg')+';base64,'+t.b64; }
+          }catch(_){}
+        })();
+        const cap=document.createElement('div'); cap.className='cap';
+        const dt=new Date(it.ts||Date.now());
+        cap.textContent=`${it.problem||'문항'} · ${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+        box.appendChild(img); box.appendChild(cap);
+        list.appendChild(box);
+      });
+    }catch(e){
+      msg.textContent='네트워크 오류';
+    }
+  }
+
+  document.getElementById('btnGo').onclick=query;
+})();
+</script>
+</body>
+</html>
